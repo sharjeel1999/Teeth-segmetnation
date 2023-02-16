@@ -7,23 +7,6 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset, random_split
 import cv2
 
-from sklearn.metrics import confusion_matrix, average_precision_score
-import warnings
-warnings.filterwarnings("ignore")
-
-def prec_rec(pred, gt):
-    
-    tn, fp, fn, tp = confusion_matrix(pred.ravel(), gt.ravel()).ravel()
-    
-    prec = (tp)/(tp+fp)
-    recall = (tp)/(tp+fn)
-    specificity = (tn)/(tn+fn)
-    accuracy = (tp+tn)/(tp+fp+tn+fn)
-    
-    iou = (tp)/(tp + fp + fn)
-    
-    return prec, recall, specificity, accuracy, iou
-
 def dice_coeff_t(pred, target):
     smooth = 1.
     num = pred.size(0)
@@ -51,12 +34,10 @@ def mIoU(pred, target, num_classes):
     return miou, iou
 
 def dice_coeff(pred, target):
-    #print('pred and target shapes: ', pred.shape, ' ', target.shape)
     smooth = 0.001
     num = pred.size(0)
     m1 = pred.view(num, -1)  # Flatten
     m2 = target.view(num, -1)  # Flatten
-    #print('reshaped shapes: ', m1.shape, ' ', m2.shape)
     intersection = (m1 * m2).sum()
     
     dice = (2. * intersection + smooth) / (m1.sum() + m2.sum() + smooth)
@@ -70,7 +51,7 @@ def class_dice(pred, target, epsilon = 1e-6):
     dice = torch.ones(num_classes-1)
     dscore = torch.ones(num_classes-1)
     iou_score = torch.ones(num_classes-1)
-    for c in range(0, num_classes):
+    for c in range(1, num_classes):
         p = (pred_class == c)
         t = (target == c)
         #print('p shape: ', p.shape)
@@ -116,11 +97,10 @@ def l2_loss(input_, t_seg, target, weight):
     #print('t seg shape: ', t_seg.shape)
     t_seg_in = torch.sum(t_seg[:, :-1], 1)[:, None] # ===============
     t_seg_out = torch.ones_like(t_seg_in) - t_seg_in
-    
-    #print('input/target: ', input_.shape, target.shape)
+
     loss = (input_ - target) ** 2
     #print('shapesss: ', loss.shape, ' ', t_seg_in.shape)
-    loss = (loss * t_seg_in * weight[0]) + (loss * t_seg_out)
+    loss = (loss * t_seg_in * weight[0])# + (loss * t_seg_out)
 
     return torch.mean(loss)
 
@@ -159,7 +139,7 @@ class FocalTwerskyLoss(nn.Module):
     def tversky_loss(self, pred, target, weights):
         #pred = torch.argmax(pred, dim = 1)
         #weights = torch.squeeze(weights, dim = 1)
-        target_oh = torch.eye(self.num_classes).cuda()[target.squeeze(1).cuda()]
+        target_oh = torch.eye(self.num_classes)[target.squeeze(1)]
         target_oh = target_oh.permute(0, 3, 1, 2).float()
         m = nn.Softmax(dim=1)
         probs = m(pred)
@@ -189,29 +169,22 @@ class FocalTwerskyLoss(nn.Module):
         
         return total_loss
 
+def comined_loss(pred, target, weights, epoch):
 
-def comined_loss(pred, target, weights, epoch, aff_pred, aff_target):
-
-    lossf = nn.CrossEntropyLoss()#weight = weights(pred, target).cuda())
-    ce = lossf(pred, target)
+    loss = nn.CrossEntropyLoss()#weight = weights(pred, target).cuda())
+    ce = loss(pred, target)
     
-    ftl_func = FocalTwerskyLoss(2, 0.5, 0.5, 1)#(2, 0.2, 0.8, 3/5)
+    ftl_func = FocalTwerskyLoss(2, 0.2, 0.8, 3/5)
     ftl = ftl_func(pred, target, weights)
-
-    dl, dsc, ious = class_dice(pred, target)
     
-    #print('aff pred: ', aff_pred.shape)
-    #print('aff target: ', aff_target.shape)
-
-    target = torch.unsqueeze(target, dim = 1)
-
-    aff_calc_weight = [1.5, 0.5]
-    aff_loss = l2_loss(aff_pred, target.float(),
-                       aff_target[:, 0, :, :aff_pred.shape[2], :aff_pred.shape[3]],
-                                  aff_calc_weight)
-
-    loss = ce + ftl + (1-ious)**2 + aff_loss
-    #loss = ce + aff_loss# + dl
+    #FP, FN = Segloss(pred, target, weights)
+    #s_loss = lamda * FP + FN
+    #print('before dc')
+    dl, dsc, ious = class_dice(pred, target)
+    #if epoch > 15:
+        #loss = ftl + (1-dsc)
+    #else:
+    loss = ce + ftl + (1-ious)**2
     
     return loss, dsc, ious
 
@@ -234,23 +207,6 @@ def comined_loss_aff(pred, aff_pred, target, aff_target):
     return loss, dsc, ious
 
 
-def score_after_ins(ins_mask, gt):
-    #print('start ins: ', ins_mask.shape)
-    #print('start gt: ', gt.shape)
-    inds = ins_mask > 0
-    sum_inds = np.sum(inds, axis = 2)
-    sem_seg = np.zeros((256, 256))
-    sem_seg[sum_inds > 0] = 1
-    gt = np.squeeze(gt, axis = 0)
-    
-    #print('end ins: ', sem_seg.shape)
-    #print('end gt: ', gt.shape)
-    dice = dice_coeff(sem_seg, gt)
-    iou_score = get_IoU(sem_seg, gt)
-    
-    return dice, iou_score
-
-
 # ================================================ loaders ========================================
 
 class DataPrep(Dataset):
@@ -260,7 +216,7 @@ class DataPrep(Dataset):
         self.data = self.data[0:self.len]
         self.labels = 2
         self.aff_r = 5
-        self.img_size = 259 # 259 for tranformer
+        self.img_size = 259
         self.mean = [0.477, 0.451, 0.411]
         self.std = [0.284, 0.280, 0.292]
         
@@ -273,13 +229,11 @@ class DataPrep(Dataset):
         return len(self.data)
     
     def __getitem__(self, index):
-        #img, img_t, img_t_aff, _ = self.data[index]
-        img, img_t, img_t_aff, weights, _ = self.data[index]
+        img, img_t, img_t_aff, _ = self.data[index]
         
-        img = cv2.resize(img, (259, 259)) # 224 for swin and 259 for ours
+        img = cv2.resize(img, (259,259)) # 224 for swin
         img_t = cv2.resize(img_t, (259, 259), interpolation = cv2.INTER_NEAREST)
         img_t_aff = cv2.resize(img_t_aff, (259, 259), interpolation = cv2.INTER_NEAREST)
-        weights = cv2.resize(weights, (259, 259), interpolation = cv2.INTER_NEAREST)
         #print('loader 1 shape: ', img_t_aff.shape)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = (img/np.max(img))
@@ -294,9 +248,8 @@ class DataPrep(Dataset):
         out_data = self.transform(img)
         out_t = self.transform(img_t)
         img_t_aff = self.transform(img_t_aff)
-        weights = self.transform(weights)
         #print('loader 1 shape: ', img_t_aff.shape)
-        return out_data, out_t, img_t_aff, weights
+        return out_data, out_t, img_t_aff
 
 class Test_DataPrep(Dataset):
     def __init__(self, path):
@@ -318,13 +271,11 @@ class Test_DataPrep(Dataset):
         return len(self.data)
     
     def __getitem__(self, index):
-        #img, img_t, img_t_aff, _ = self.data[index]
-        img, img_t, img_t_aff, weights, _ = self.data[index]
-
-        img = cv2.resize(img, (259, 259))
+        img, img_t, img_t_aff, _ = self.data[index]
+        
+        img = cv2.resize(img, (259,259))
         img_t = cv2.resize(img_t, (259, 259), interpolation = cv2.INTER_NEAREST)
         img_t_aff = cv2.resize(img_t_aff, (259, 259), interpolation = cv2.INTER_NEAREST)
-        weights = cv2.resize(weights, (259, 259), interpolation = cv2.INTER_NEAREST)
         
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = (img/np.max(img))
@@ -339,22 +290,19 @@ class Test_DataPrep(Dataset):
         out_data = self.transform(img)
         out_t = self.transform(img_t)
         img_t_aff = self.transform(img_t_aff)
-        weights = self.transform(weights)
         
-        return out_data, out_t, img_t_aff, weights
+        return out_data, out_t, img_t_aff
 
-# ========================================================================================
+# ================================= affinity loaders ======================================
 
 class DataPrep_affinity(Dataset):
     def __init__(self, path):
         self.data = np.load(path, allow_pickle = True)
-        #self.data = self.data[0:8]
-
-        #self.len = len(self.data) - 20
-        #self.data = self.data[0:self.len]
+        self.len = len(self.data) - 20
+        self.data = self.data[0:self.len]
         self.labels = 2
         self.aff_r = 5
-        self.img_size = 256
+        self.img_size = 128
         self.mean = [0.477, 0.451, 0.411]
         self.std = [0.284, 0.280, 0.292]
         
@@ -364,19 +312,17 @@ class DataPrep_affinity(Dataset):
         self.transform = transforms.ToTensor()
         
     def __len__(self):
-        #print('Length: ', len(self.data))
         return len(self.data)
     
     def __getitem__(self, index):
         img, img_t, img_t_aff, weights, _ = self.data[index]
-
-        img = cv2.resize(img, (256, 256))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = (img/np.max(img))*255
+        
+        img = cv2.resize(img, (256,256))
         img_t = cv2.resize(img_t, (256, 256), interpolation = cv2.INTER_NEAREST)
         img_t_aff = cv2.resize(img_t_aff, (256, 256), interpolation = cv2.INTER_NEAREST)
-        weights = cv2.resize(weights, (256, 256), interpolation = cv2.INTER_NEAREST)
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img = (img/np.max(img))
         
         out_t_aff = torch.zeros((self.aff_r, self.aff_r**2,
                                  self.img_size, self.img_size))
@@ -386,7 +332,6 @@ class DataPrep_affinity(Dataset):
         
         out_data = self.transform(out_data)
         out_t = self.transform(out_t)
-        weights = self.transform(weights)
 
         for mul in range(5):
             img_t_aff_mul = img_t_aff[0:self.img_size:2**mul,
@@ -413,6 +358,7 @@ class DataPrep_affinity(Dataset):
                         = img_t_aff_mul_2_pix[i:i+img_size,
                                               j:j+img_size]
 
+            # 同じ色ならAffinity=1(同じ物体)/同じ色でなければAffinity=0(別の物体)
             aff_data = np.where((img_t_aff_compare[:, :, :, 0]
                                  == img_t_aff_mul[:, :, 0])
                                 & (img_t_aff_compare[:, :, :, 1]
@@ -421,8 +367,11 @@ class DataPrep_affinity(Dataset):
                                    == img_t_aff_mul[:, :, 2]), 1, 0)
             aff_data = self.transform(aff_data.transpose(1, 2, 0))
             out_t_aff[mul, :, 0:img_size, 0:img_size] = aff_data
-
-        return out_data, out_t, out_t_aff, weights
+            
+            #print('out shape: ', out_data.shape)
+            #print('target shape: ', out_t.shape)
+            #print('aff shape: ', out_t_aff.shape)
+        return out_data, out_t, out_t_aff
 
 class Test_DataPrep_affinity(Dataset):
     def __init__(self, path):
@@ -431,7 +380,7 @@ class Test_DataPrep_affinity(Dataset):
         self.data = self.data[self.len:len(self.data)]
         self.labels = 2
         self.aff_r = 5
-        self.img_size = 256
+        self.img_size = 128
         self.mean = [0.477, 0.451, 0.411]
         self.std = [0.284, 0.280, 0.292]
         
@@ -445,15 +394,13 @@ class Test_DataPrep_affinity(Dataset):
     
     def __getitem__(self, index):
         img, img_t, img_t_aff, weights, _ = self.data[index]
-
-        img = cv2.resize(img, (256, 256))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = (img/np.max(img))*255
+        
+        img = cv2.resize(img, (256,256))
         img_t = cv2.resize(img_t, (256, 256), interpolation = cv2.INTER_NEAREST)
         img_t_aff = cv2.resize(img_t_aff, (256, 256), interpolation = cv2.INTER_NEAREST)
-        weights = cv2.resize(weights, (256, 256), interpolation = cv2.INTER_NEAREST)
-
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img = (img/np.max(img))
-
+        
         out_t_aff = torch.zeros((self.aff_r, self.aff_r**2,
                                  self.img_size, self.img_size))
         
@@ -462,7 +409,6 @@ class Test_DataPrep_affinity(Dataset):
         
         out_data = self.transform(out_data)
         out_t = self.transform(out_t)
-        weights = self.transform(weights)
 
         for mul in range(5):
             img_t_aff_mul = img_t_aff[0:self.img_size:2**mul,
@@ -489,6 +435,7 @@ class Test_DataPrep_affinity(Dataset):
                         = img_t_aff_mul_2_pix[i:i+img_size,
                                               j:j+img_size]
 
+            # 同じ色ならAffinity=1(同じ物体)/同じ色でなければAffinity=0(別の物体)
             aff_data = np.where((img_t_aff_compare[:, :, :, 0]
                                  == img_t_aff_mul[:, :, 0])
                                 & (img_t_aff_compare[:, :, :, 1]
@@ -497,5 +444,8 @@ class Test_DataPrep_affinity(Dataset):
                                    == img_t_aff_mul[:, :, 2]), 1, 0)
             aff_data = self.transform(aff_data.transpose(1, 2, 0))
             out_t_aff[mul, :, 0:img_size, 0:img_size] = aff_data
-
-        return out_data, out_t, out_t_aff, weights
+            
+            #print('out shape: ', out_data.shape)
+            #print('target shape: ', out_t.shape)
+            #print('aff shape: ', out_t_aff.shape)
+        return out_data, out_t, out_t_aff
