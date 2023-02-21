@@ -19,7 +19,8 @@ device = torch.device('cuda:0')
 model = H_Net(in_channels=1, num_classes=2, image_size=128).to(device)
 
 
-data_path = 'C:\\Users\\Sharjeel\\Desktop\\datasets\\teeth_data\\proper_final_data.npy'
+#data_path = 'C:\\Users\\Sharjeel\\Desktop\\datasets\\teeth_data\\proper_final_data.npy'
+data_path = 'C:\\Users\\Sharjeel\\Desktop\\codes\\teeth_numbered_data\\Total_numbered_data.npy'
 
 dataset = DataPrep_affinity(data_path)
 Train_loader = torch.utils.data.DataLoader(dataset, batch_size = 3, shuffle = True)
@@ -119,7 +120,6 @@ for epoch in range(0, EPOCHS):
         aff_labels = aff_labels.cuda()
         weights = weights.cuda()
         
-        optimizer.zero_grad()
 
         outputs4, out_aff = model(inputs.float())
         
@@ -129,8 +129,6 @@ for epoch in range(0, EPOCHS):
         loss4, dsc4, iouscore4 = comined_loss(outputs4, labels.long(), weights, epoch, out_aff, aff_labels)
         loss = loss4
         
-        loss.backward()
-        optimizer.step()
         
         outputs4 = torch.argmax(outputs4, dim = 1)
         outputs4 = torch.squeeze(outputs4, dim = 0)
@@ -196,10 +194,10 @@ for epoch in range(0, EPOCHS):
 
     if np.mean(training_dice) > 0.85:
       if dice_latch < np.mean(training_dice):
-          torch.save(model.state_dict(), "C:\\Users\\Sharjeel\\Desktop\\codes\\teeth_segmentation_saves\\weight_saves\\experiment_1_semantic_and_instance_only\\Model{}.pth".format(np.mean(training_dice)))
+          torch.save(model.state_dict(), "C:\\Users\\Sharjeel\\Desktop\\codes\\teeth_segmentation_saves\\weight_saves\\experiment_2_semantic_and_numbered_only\\Model{}.pth".format(np.mean(validation_dice)))
           dice_latch = np.mean(training_dice)
     
-    with open('C:\\Users\\Sharjeel\\Desktop\\codes\\teeth_segmentation_saves\\record_saves\\experiment_1_semantic_and_instance_only.txt', 'a') as f:
+    with open('C:\\Users\\Sharjeel\\Desktop\\codes\\teeth_segmentation_saves\\record_saves\\experiment_2_semantic_and_numbered_only.txt', 'a') as f:
         f.write(f'Epoch: {epoch+1}')
         f.write('\n')
         f.write(f'Train Loss: {np.mean(training_loss)} Train IOU: {np.mean(training_iou)} Train Dice: {np.mean(training_dice)}')
