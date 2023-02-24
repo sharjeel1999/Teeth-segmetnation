@@ -189,11 +189,26 @@ class FocalTwerskyLoss(nn.Module):
         
         return total_loss
 
+def detection_loss(pred_det, target_det):
+    det_loss_func = nn.MSELoss()
+    
+    #target_det = target_det[:, :, 0:3]
+    #print('pred detect shape: ', pred_det.shape)
+    #print('target detect shape: ', target_det.shape)
+    
+    det_loss = det_loss_func(pred_det, target_det)
+    
+    return det_loss
+    
 
-def comined_loss(pred, target, weights, epoch, aff_pred, aff_target):
+def comined_loss(pred, target, numb_pred, weights, epoch, numb_target):
 
     lossf = nn.CrossEntropyLoss()#weight = weights(pred, target).cuda())
+    
     ce = lossf(pred, target)
+    
+    numb_target = torch.squeeze(numb_target, dim = 1)
+    det_loss = lossf(numb_pred, numb_target)
     
     ftl_func = FocalTwerskyLoss(2, 0.5, 0.5, 1)#(2, 0.2, 0.8, 3/5)
     ftl = ftl_func(pred, target, weights)
@@ -205,15 +220,29 @@ def comined_loss(pred, target, weights, epoch, aff_pred, aff_target):
 
     target = torch.unsqueeze(target, dim = 1)
 
-    aff_calc_weight = [1.5, 0.5]
-    aff_loss = l2_loss(aff_pred, target.float(),
-                       aff_target[:, 0, :, :aff_pred.shape[2], :aff_pred.shape[3]],
-                                  aff_calc_weight)
+    # aff_calc_weight = [1.5, 0.5]
+    # aff_loss = l2_loss(aff_pred, target.float(),
+    #                    aff_target[:, 0, :, :aff_pred.shape[2], :aff_pred.shape[3]],
+    #                               aff_calc_weight)
 
-    loss = ce + ftl + (1-ious)**2 + aff_loss
+    loss = ce + ftl + (1-ious)**2# + aff_loss
     #loss = ce + aff_loss# + dl
     
-    return loss, dsc, ious
+    #batch = detection_pred.shape[0]
+    
+    #if batch < 3:
+        #print('Batch: ', batch)
+    
+    #det_loss = detection_loss(center_pred, center_target)
+    
+    #detection_target = torch.reshape(detection_target, (batch, 160))
+    
+    #det_loss_func = nn.MSELoss()
+    #det_loss = det_loss_func(detection_pred, detection_target)
+    
+    loss = loss + det_loss
+    
+    return loss, dsc, ious, det_loss
 
 
 def comined_loss_aff(pred, aff_pred, target, aff_target):
@@ -350,8 +379,8 @@ class DataPrep_affinity(Dataset):
         self.data = np.load(path, allow_pickle = True)
         #self.data = self.data[0:8]
 
-        #self.len = len(self.data) - 20
-        #self.data = self.data[0:self.len]
+        self.len = len(self.data) - 20
+        self.data = self.data[0:self.len]
         self.labels = 2
         self.aff_r = 5
         self.img_size = 256
@@ -368,7 +397,7 @@ class DataPrep_affinity(Dataset):
         return len(self.data)
     
     def __getitem__(self, index):
-        img, img_t, img_t_aff, weights, _ = self.data[index]
+        img, img_t, img_t_aff, numbered, onehot_numb, weights, all_teeths, _ = self.data[index] # for numbered [image, mask, instance, numbered, weights, _]
 
         img = cv2.resize(img, (256, 256))
         img_t = cv2.resize(img_t, (256, 256), interpolation = cv2.INTER_NEAREST)
@@ -387,6 +416,8 @@ class DataPrep_affinity(Dataset):
         out_data = self.transform(out_data)
         out_t = self.transform(out_t)
         weights = self.transform(weights)
+        onehot_numb = self.transform(onehot_numb)
+        #print('in onehot unique: ', torch.unique(onehot_numb))
 
         for mul in range(5):
             img_t_aff_mul = img_t_aff[0:self.img_size:2**mul,
@@ -422,7 +453,9 @@ class DataPrep_affinity(Dataset):
             aff_data = self.transform(aff_data.transpose(1, 2, 0))
             out_t_aff[mul, :, 0:img_size, 0:img_size] = aff_data
 
-        return out_data, out_t, out_t_aff, weights
+        
+        all_teeths = torch.Tensor(all_teeths)
+        return out_data, out_t, out_t_aff, weights, onehot_numb
 
 class Test_DataPrep_affinity(Dataset):
     def __init__(self, path):
@@ -444,8 +477,8 @@ class Test_DataPrep_affinity(Dataset):
         return len(self.data)
     
     def __getitem__(self, index):
-        img, img_t, img_t_aff, weights, _ = self.data[index]
-
+        img, img_t, img_t_aff, numbered, onehot_numb, weights, all_teeths, _ = self.data[index] # for numbered [image, mask, instance, numbered, weights, _]
+        
         img = cv2.resize(img, (256, 256))
         img_t = cv2.resize(img_t, (256, 256), interpolation = cv2.INTER_NEAREST)
         img_t_aff = cv2.resize(img_t_aff, (256, 256), interpolation = cv2.INTER_NEAREST)
@@ -463,6 +496,8 @@ class Test_DataPrep_affinity(Dataset):
         out_data = self.transform(out_data)
         out_t = self.transform(out_t)
         weights = self.transform(weights)
+        onehot_numb = self.transform(onehot_numb)
+        #print('in onehot unique: ', torch.unique(onehot_numb))
 
         for mul in range(5):
             img_t_aff_mul = img_t_aff[0:self.img_size:2**mul,
@@ -498,4 +533,6 @@ class Test_DataPrep_affinity(Dataset):
             aff_data = self.transform(aff_data.transpose(1, 2, 0))
             out_t_aff[mul, :, 0:img_size, 0:img_size] = aff_data
 
-        return out_data, out_t, out_t_aff, weights
+        
+        all_teeths = torch.Tensor(all_teeths)
+        return out_data, out_t, out_t_aff, weights, onehot_numb

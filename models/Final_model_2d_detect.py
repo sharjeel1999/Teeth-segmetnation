@@ -88,13 +88,13 @@ class Numbering_Block(nn.Module):
         self.conv_2 = Conv_2d(in_channels, in_channels, 3)
         #self.conv_3 = Conv_2d(in_channels, 4, 1)
         self.conv_layer = nn.Conv2d(in_channels, 33, kernel_size = 3, padding = 1)
-        self.act = nn.Sigmoid()
+        #self.act = nn.Sigmoid()
         
     def forward(self, x):
         x = self.conv_1(x)
         x = self.conv_2(x)
         x = self.conv_layer(x)
-        x = self.act(x)
+        #x = self.act(x)
         
         return x
 
@@ -209,13 +209,13 @@ class H_Net(nn.Module):
                 nn.ReLU()
             )
         
-        self.affinity_prediction = Affinity_Block(int(self.network_channs*2))
+        #self.affinity_prediction = Affinity_Block(int(self.network_channs*2))
         
         self.prediction_block = nn.Sequential(
                 nn.Conv2d(int(self.network_channs*2), num_classes, kernel_size = 1)
             )
         
-        self.spatial_reduction = nn.Sequential(
+        '''self.spatial_reduction = nn.Sequential(
                 
                 nn.Conv2d(int(self.network_channs*2), self.network_channs, kernel_size = 1),
                 nn.BatchNorm2d(self.network_channs),
@@ -281,13 +281,14 @@ class H_Net(nn.Module):
                 nn.BatchNorm1d(32),
                 nn.ReLU(),
                 
-                nn.Linear(64, 5),
+                nn.Linear(64, 3),
                 nn.BatchNorm1d(32),
                 nn.Sigmoid(),
                 
-            )
+            )'''
         
-        #self.numbering_prediction = Numbering_Block(int(self.network_channs*2))
+        #self.numbering_prediction = Numbering_Block(int(self.network_channs*2 + 25))
+        self.numbering_prediction = Numbering_Block(int(self.network_channs*2))
         
     def forward(self, x):
         x1 = self.block_1(x)
@@ -324,14 +325,18 @@ class H_Net(nn.Module):
         xcomb = torch.cat([x4, x2], dim = 1)
         #print('comb out shape: ', xcomb.shape)
         
-        aff_out = self.affinity_prediction(xcomb)
+        #aff_out = self.affinity_prediction(xcomb)
+        #print('affinity shape: ', aff_out.shape)
         semantic = self.prediction_block(xcomb)
-        #onehot_numbering = self.numbering_prediction(xcomb)
+        sem_mxed = torch.argmax(semantic, dim = 1)
         
-        xreduced = self.spatial_reduction(xcomb)
+        #for_numb = torch.cat([xcomb, aff_out], dim = 1)
+        onehot_numbering = self.numbering_prediction(xcomb)
+        
+        #xreduced = self.spatial_reduction(xcomb)
         #print('reduced shape: ', xreduced.shape)
-        xcomb_flat = torch.flatten(xreduced, start_dim=2)
+        #xcomb_flat = torch.flatten(xreduced, start_dim=2)
         #print('flattented shape: ', xcomb_flat.shape)
-        det_out = self.detection_block(xcomb_flat)
+        #det_out = self.detection_block(xcomb_flat)
         
-        return semantic, aff_out, det_out
+        return semantic, onehot_numbering
